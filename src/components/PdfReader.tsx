@@ -534,23 +534,23 @@ export const PdfReader: React.FC<Props> = ({
           </div>
         ) : (
           <div className="min-w-fit min-h-full mx-auto flex flex-col items-center justify-start my-auto relative p-1 sm:p-2">
-            {/* Direct Navigation Touch Overlay Buttons */}
+            {/* Direct Navigation Touch Overlay Buttons - Small, Semi-transparent & Discreet */}
             <button
               onClick={prevPage}
               disabled={currentPage <= 1}
-              className="fixed left-2 sm:left-6 top-1/2 -translate-y-1/2 z-20 p-2 sm:p-3 rounded-full bg-slate-900/80 hover:bg-slate-900 text-white shadow-xl disabled:opacity-0 transition-all cursor-pointer border border-slate-700"
+              className="fixed left-1.5 sm:left-4 top-1/2 -translate-y-1/2 z-20 w-8 h-8 sm:w-10 sm:h-10 rounded-full bg-slate-900/30 hover:bg-slate-900/80 text-white/60 hover:text-white shadow-md disabled:opacity-0 transition-all cursor-pointer border border-slate-700/40 backdrop-blur-xs flex items-center justify-center opacity-40 hover:opacity-100"
               title="Pagina precedente"
             >
-              <ChevronLeft size={22} />
+              <ChevronLeft size={16} />
             </button>
 
             <button
               onClick={nextPage}
               disabled={currentPage >= numPages}
-              className="fixed right-2 sm:right-6 top-1/2 -translate-y-1/2 z-20 p-2 sm:p-3 rounded-full bg-slate-900/80 hover:bg-slate-900 text-white shadow-xl disabled:opacity-0 transition-all cursor-pointer border border-slate-700"
+              className="fixed right-1.5 sm:right-4 top-1/2 -translate-y-1/2 z-20 w-8 h-8 sm:w-10 sm:h-10 rounded-full bg-slate-900/30 hover:bg-slate-900/80 text-white/60 hover:text-white shadow-md disabled:opacity-0 transition-all cursor-pointer border border-slate-700/40 backdrop-blur-xs flex items-center justify-center opacity-40 hover:opacity-100"
               title="Pagina successiva"
             >
-              <ChevronRight size={22} />
+              <ChevronRight size={16} />
             </button>
 
             {/* Canvas Page Render - Pure, High Contrast Vector Page */}
