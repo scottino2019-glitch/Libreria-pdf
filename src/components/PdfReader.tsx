@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { pdfjsLib } from '../lib/pdfWorker';
-import { PdfItem, Bookmark, ReadingSettings, SearchResult } from '../types';
+import { PdfItem, Bookmark, ReadingSettings, SearchResult, ReadingTheme } from '../types';
 import {
   ArrowLeft,
   ChevronLeft,
@@ -12,7 +12,11 @@ import {
   Minimize,
   X,
   ZoomIn,
-  ZoomOut
+  ZoomOut,
+  Sun,
+  Moon,
+  Sparkles,
+  Type
 } from 'lucide-react';
 
 interface Props {
@@ -47,16 +51,22 @@ export const PdfReader: React.FC<Props> = ({
   // UI state
   const [showSearchPanel, setShowSearchPanel] = useState<boolean>(false);
   const [showOutlinePanel, setShowOutlinePanel] = useState<boolean>(false);
+  const [showZoomMenu, setShowZoomMenu] = useState<boolean>(false);
   const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
   const [isSearching, setIsSearching] = useState<boolean>(false);
   const [outline, setOutline] = useState<any[]>([]);
 
-  // Canvas ref & Touch gestures
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  // Dual Canvas References for flicker-free double buffering
+  const [activeCanvasId, setActiveCanvasId] = useState<'A' | 'B'>('A');
+  const canvasRefA = useRef<HTMLCanvasElement | null>(null);
+  const canvasRefB = useRef<HTMLCanvasElement | null>(null);
+
   const containerRef = useRef<HTMLDivElement | null>(null);
   const touchStartX = useRef<number | null>(null);
+  const touchStartDistRef = useRef<number | null>(null);
+  const touchInitialScaleRef = useRef<number>(1.0);
   const renderTaskRef = useRef<any>(null);
 
   const isCurrentBookmarked = bookmarks.some(b => b.pdfId === pdf.id && b.pageNumber === currentPage);
@@ -103,10 +113,10 @@ export const PdfReader: React.FC<Props> = ({
     };
   }, [pdf.url]);
 
-  // Render Page on Canvas with razor-sharp high-DPI vector resolution
+  // Render Page with Direct Native High-DPI Vector Rendering and Double-Canvas Swap
   const renderPage = useCallback(
     async (pageNumber: number) => {
-      if (!doc || !canvasRef.current) return;
+      if (!doc) return;
 
       try {
         if (renderTaskRef.current) {
@@ -114,28 +124,33 @@ export const PdfReader: React.FC<Props> = ({
         }
 
         const page = await doc.getPage(pageNumber);
-        const canvas = canvasRef.current;
-        const ctx = canvas.getContext('2d', { alpha: false });
-        if (!ctx) return;
 
-        // Container measurements
+        // Determine target canvas (the inactive one)
+        const targetId = activeCanvasId === 'A' ? 'B' : 'A';
+        const targetCanvas = targetId === 'A' ? canvasRefA.current : canvasRefB.current;
+        if (!targetCanvas) return;
+
+        // Container measurements with minimal padding to avoid squishing
         const isMobile = window.innerWidth < 640;
-        const padding = isMobile ? 12 : 32;
+        const padding = isMobile ? 8 : 24;
         const containerWidth = containerRef.current && containerRef.current.clientWidth > 100
           ? Math.max(280, containerRef.current.clientWidth - padding)
-          : (isMobile ? 320 : 700);
+          : (isMobile ? window.innerWidth - padding : 700);
 
         const unscaledViewport = page.getViewport({ scale: 1.0 });
 
-        // Calculate target scale: 1.0 scale fits the page perfectly to container width
+        // Base scale fits width of page to container
         const baseWidthScale = containerWidth / unscaledViewport.width;
-        const targetScale = baseWidthScale * settings.fontSizeScale;
+
+        // Target scale: ensure font scale is at least 1.0 (never shrinks smaller than page width)
+        const currentScale = Math.max(1.0, settings.fontSizeScale || 1.2);
+        const targetScale = baseWidthScale * currentScale;
 
         // Logical viewport
         const viewport = page.getViewport({ scale: targetScale });
 
-        // High DPI pixel density multiplier (2.0x or 3.0x for Retina/Smartphones)
-        const dpr = Math.max(window.devicePixelRatio || 1, 2.0);
+        // High DPI multiplier (capped at 2.5 for optimal performance and crisp text)
+        const dpr = Math.min(Math.max(window.devicePixelRatio || 1, 2.0), 2.5);
 
         // Physical canvas buffer pixel dimensions
         const bufferWidth = Math.floor(viewport.width * dpr);
@@ -145,19 +160,18 @@ export const PdfReader: React.FC<Props> = ({
         const cssWidth = Math.floor(viewport.width);
         const cssHeight = Math.floor(viewport.height);
 
-        // Double Buffering: render on an offscreen canvas first to prevent white canvas flicker
-        const offscreen = document.createElement('canvas');
-        offscreen.width = bufferWidth;
-        offscreen.height = bufferHeight;
-        const offCtx = offscreen.getContext('2d', { alpha: false });
-        if (!offCtx) return;
+        // Prepare target canvas
+        targetCanvas.width = bufferWidth;
+        targetCanvas.height = bufferHeight;
+        targetCanvas.style.width = `${cssWidth}px`;
+        targetCanvas.style.height = `${cssHeight}px`;
 
-        offCtx.imageSmoothingEnabled = true;
-        offCtx.imageSmoothingQuality = 'high';
+        const ctx = targetCanvas.getContext('2d', { alpha: false });
+        if (!ctx) return;
 
-        // High DPI PDF.js render context using dpr transform matrix
+        // Render directly with PDF.js vector engine (ultra-sharp, high-contrast, subpixel antialiasing)
         const renderContext = {
-          canvasContext: offCtx,
+          canvasContext: ctx,
           transform: dpr !== 1 ? [dpr, 0, 0, dpr, 0, 0] : null,
           viewport: viewport,
         };
@@ -166,22 +180,15 @@ export const PdfReader: React.FC<Props> = ({
         renderTaskRef.current = task;
         await task.promise;
 
-        // Atomic swap to visible canvas once rendering finishes
-        canvas.width = bufferWidth;
-        canvas.height = bufferHeight;
-        canvas.style.width = `${cssWidth}px`;
-        canvas.style.height = `${cssHeight}px`;
-
-        ctx.imageSmoothingEnabled = true;
-        ctx.imageSmoothingQuality = 'high';
-        ctx.drawImage(offscreen, 0, 0);
+        // Swap to newly rendered canvas instantly (zero flicker, zero white flash)
+        setActiveCanvasId(targetId);
       } catch (err: any) {
         if (err.name !== 'RenderingCancelledException') {
           console.error('Error rendering page:', err);
         }
       }
     },
-    [doc, settings.fontSizeScale]
+    [doc, activeCanvasId, settings.fontSizeScale]
   );
 
   // Store onSaveProgress in ref to prevent infinite re-render loops
@@ -210,7 +217,7 @@ export const PdfReader: React.FC<Props> = ({
 
     const handleResize = () => {
       const currentWidth = window.innerWidth;
-      if (Math.abs(currentWidth - lastViewportWidthRef.current) > 10) {
+      if (Math.abs(currentWidth - lastViewportWidthRef.current) > 15) {
         lastViewportWidthRef.current = currentWidth;
         clearTimeout(timeoutId);
         timeoutId = setTimeout(executeRender, 120);
@@ -248,35 +255,52 @@ export const PdfReader: React.FC<Props> = ({
   // Zoom handlers
   const [zoomToast, setZoomToast] = useState<string | null>(null);
   const lastTapRef = useRef<number>(0);
-  const touchStartDistRef = useRef<number | null>(null);
 
   const showZoomFeedback = (scale: number) => {
-    setZoomToast(`${Math.round(scale * 100)}%`);
-    setTimeout(() => setZoomToast(null), 1500);
+    const pct = Math.round(scale * 100);
+    let desc = `${pct}%`;
+    if (scale >= 1.7) desc += ' • Testo Molto Grande';
+    else if (scale >= 1.35) desc += ' • Testo Grande (Confortevole)';
+    else if (scale === 1.0) desc += ' • Adatta Pagina';
+    setZoomToast(desc);
+    setTimeout(() => setZoomToast(null), 1800);
   };
 
   const handleZoomIn = () => {
-    const newScale = Math.min(3.5, Number((settings.fontSizeScale + 0.25).toFixed(2)));
+    const current = Math.max(1.0, settings.fontSizeScale || 1.2);
+    const newScale = Math.min(3.5, Number((current + 0.2).toFixed(2)));
     onUpdateSettings({ ...settings, fontSizeScale: newScale });
     showZoomFeedback(newScale);
   };
 
   const handleZoomOut = () => {
-    const newScale = Math.max(0.75, Number((settings.fontSizeScale - 0.25).toFixed(2)));
+    // Strictly minimum 1.0 so the font NEVER shrinks into micro-text
+    const current = Math.max(1.0, settings.fontSizeScale || 1.2);
+    const newScale = Math.max(1.0, Number((current - 0.2).toFixed(2)));
     onUpdateSettings({ ...settings, fontSizeScale: newScale });
     showZoomFeedback(newScale);
   };
 
-  const handleResetZoom = () => {
-    onUpdateSettings({ ...settings, fontSizeScale: 1.0 });
-    showZoomFeedback(1.0);
+  const handleSetScale = (scale: number) => {
+    const clamped = Math.max(1.0, Math.min(3.5, scale));
+    onUpdateSettings({ ...settings, fontSizeScale: clamped });
+    showZoomFeedback(clamped);
+    setShowZoomMenu(false);
   };
 
-  // Double Tap on Canvas to toggle zoom
+  // Double Tap on Canvas to toggle reading comfort zoom
   const handleCanvasDoubleTap = () => {
     const now = Date.now();
-    if (now - lastTapRef.current < 300) {
-      const newScale = settings.fontSizeScale >= 1.5 ? 1.0 : 1.75;
+    if (now - lastTapRef.current < 320) {
+      // Cycle: 1.0x (Adatta) -> 1.45x (Testo Grande) -> 1.85x (Molto Grande) -> 1.0x
+      let newScale: number;
+      if (settings.fontSizeScale < 1.3) {
+        newScale = 1.45;
+      } else if (settings.fontSizeScale < 1.7) {
+        newScale = 1.85;
+      } else {
+        newScale = 1.0;
+      }
       onUpdateSettings({ ...settings, fontSizeScale: newScale });
       showZoomFeedback(newScale);
     }
@@ -292,6 +316,7 @@ export const PdfReader: React.FC<Props> = ({
       const dx = e.touches[0].clientX - e.touches[1].clientX;
       const dy = e.touches[0].clientY - e.touches[1].clientY;
       touchStartDistRef.current = Math.sqrt(dx * dx + dy * dy);
+      touchInitialScaleRef.current = settings.fontSizeScale || 1.2;
       touchStartX.current = null;
     }
   };
@@ -303,10 +328,11 @@ export const PdfReader: React.FC<Props> = ({
       const dist = Math.sqrt(dx * dx + dy * dy);
       const diff = dist - touchStartDistRef.current;
 
-      if (Math.abs(diff) > 40) {
+      // Deliberate pinch gesture (prevent accidental zoom-outs)
+      if (Math.abs(diff) > 50) {
         if (diff > 0) {
           handleZoomIn();
-        } else {
+        } else if (settings.fontSizeScale > 1.0) {
           handleZoomOut();
         }
         touchStartDistRef.current = dist;
@@ -320,10 +346,10 @@ export const PdfReader: React.FC<Props> = ({
       const diffX = touchStartX.current - touchEndX;
 
       const container = containerRef.current;
-      const isZoomed = container && (container.scrollWidth - container.clientWidth > 30);
+      const isZoomed = container && (container.scrollWidth - container.clientWidth > 40);
 
       // Avoid accidental page swipe if user is horizontally scrolling a zoomed page
-      if (!isZoomed && Math.abs(diffX) > 60) {
+      if (!isZoomed && Math.abs(diffX) > 70) {
         if (diffX > 0) {
           nextPage();
         } else {
@@ -333,6 +359,42 @@ export const PdfReader: React.FC<Props> = ({
     }
     touchStartX.current = null;
     touchStartDistRef.current = null;
+  };
+
+  // Reading Theme Toggler
+  const cycleReadingTheme = () => {
+    const themes: ReadingTheme[] = ['light', 'sepia', 'dark'];
+    const currentIndex = themes.indexOf(settings.theme as ReadingTheme);
+    const nextIndex = (currentIndex + 1) % themes.length;
+    const nextTheme = themes[nextIndex];
+    onUpdateSettings({ ...settings, theme: nextTheme });
+  };
+
+  const getThemeFilterStyle = (theme: ReadingTheme): React.CSSProperties => {
+    switch (theme) {
+      case 'sepia':
+        return {
+          filter: 'sepia(0.38) brightness(0.96) contrast(1.06)',
+          backgroundColor: '#f7f1e5',
+        };
+      case 'dark':
+      case 'night':
+        return {
+          filter: 'invert(0.92) hue-rotate(180deg) contrast(1.15) brightness(0.95)',
+          backgroundColor: '#1e293b',
+        };
+      case 'emerald':
+        return {
+          filter: 'sepia(0.25) hue-rotate(60deg) brightness(0.95) contrast(1.05)',
+          backgroundColor: '#edf4ee',
+        };
+      case 'light':
+      default:
+        return {
+          filter: 'none',
+          backgroundColor: '#ffffff',
+        };
+    }
   };
 
   // Search inside PDF
@@ -407,32 +469,95 @@ export const PdfReader: React.FC<Props> = ({
           </div>
         </div>
 
-        {/* Right: Actions (Zoom Bar, Bookmarks, Search, Fullscreen) */}
+        {/* Right: Actions (Zoom Bar, Reading Theme, Bookmarks, Search, Fullscreen) */}
         <div className="flex items-center gap-1.5 shrink-0">
-          {/* Quick Zoom Bar */}
-          <div className="flex items-center bg-slate-800 rounded-xl p-0.5 border border-slate-700/80">
+          {/* Quick Font Zoom Bar */}
+          <div className="relative flex items-center bg-slate-800 rounded-xl p-0.5 border border-slate-700/80">
             <button
               onClick={handleZoomOut}
               className="p-1.5 rounded-lg hover:bg-slate-700 text-slate-200 transition-colors"
-              title="Riduci ingrandimento (-)"
+              title="Riduci font (min 100%)"
             >
               <ZoomOut size={16} />
             </button>
             <button
-              onClick={handleResetZoom}
-              className="px-2 py-0.5 text-xs font-mono font-bold text-sky-400 hover:text-sky-300 transition-colors"
-              title="Ripristina zoom 100%"
+              onClick={() => setShowZoomMenu(!showZoomMenu)}
+              className="px-2 py-0.5 text-xs font-mono font-bold text-sky-400 hover:text-sky-300 transition-colors flex items-center gap-1"
+              title="Menu Zoom e Dimensione Font"
             >
-              {Math.round(settings.fontSizeScale * 100)}%
+              <span>{Math.round((settings.fontSizeScale || 1.2) * 100)}%</span>
             </button>
             <button
               onClick={handleZoomIn}
               className="p-1.5 rounded-lg hover:bg-slate-700 text-slate-200 transition-colors"
-              title="Aumenta ingrandimento (+)"
+              title="Ingrandisci font (+)"
             >
               <ZoomIn size={16} />
             </button>
+
+            {/* Dropdown Menu Zoom Presets */}
+            {showZoomMenu && (
+              <div className="absolute right-0 top-full mt-2 w-48 bg-slate-900 border border-slate-700 rounded-xl shadow-2xl p-2 z-50 text-xs space-y-1">
+                <div className="px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                  Dimensione Caratteri
+                </div>
+                <button
+                  onClick={() => handleSetScale(1.0)}
+                  className={`w-full text-left px-2.5 py-1.5 rounded-lg flex items-center justify-between ${
+                    settings.fontSizeScale <= 1.05 ? 'bg-sky-500/20 text-sky-300 font-bold' : 'text-slate-200 hover:bg-slate-800'
+                  }`}
+                >
+                  <span>100% (Adatta Schermo)</span>
+                </button>
+                <button
+                  onClick={() => handleSetScale(1.35)}
+                  className={`w-full text-left px-2.5 py-1.5 rounded-lg flex items-center justify-between ${
+                    settings.fontSizeScale > 1.05 && settings.fontSizeScale <= 1.45 ? 'bg-sky-500/20 text-sky-300 font-bold' : 'text-slate-200 hover:bg-slate-800'
+                  }`}
+                >
+                  <span>135% (Testo Confortevole)</span>
+                  <span className="text-[10px] text-amber-300">★ Consigliato</span>
+                </button>
+                <button
+                  onClick={() => handleSetScale(1.75)}
+                  className={`w-full text-left px-2.5 py-1.5 rounded-lg flex items-center justify-between ${
+                    settings.fontSizeScale > 1.45 && settings.fontSizeScale <= 1.9 ? 'bg-sky-500/20 text-sky-300 font-bold' : 'text-slate-200 hover:bg-slate-800'
+                  }`}
+                >
+                  <span>175% (Testo Molto Grande)</span>
+                </button>
+                <button
+                  onClick={() => handleSetScale(2.2)}
+                  className={`w-full text-left px-2.5 py-1.5 rounded-lg flex items-center justify-between ${
+                    settings.fontSizeScale > 1.9 ? 'bg-sky-500/20 text-sky-300 font-bold' : 'text-slate-200 hover:bg-slate-800'
+                  }`}
+                >
+                  <span>220% (Zoom Massimo)</span>
+                </button>
+              </div>
+            )}
           </div>
+
+          {/* Reading Theme Switcher (Chiaro / Sepia / Notte) */}
+          <button
+            onClick={cycleReadingTheme}
+            className={`p-2 rounded-xl transition-all border ${
+              settings.theme === 'sepia'
+                ? 'bg-amber-950/80 border-amber-700/60 text-amber-300'
+                : settings.theme === 'dark' || settings.theme === 'night'
+                ? 'bg-slate-950 border-slate-700 text-sky-300'
+                : 'hover:bg-slate-800 border-transparent text-slate-200'
+            }`}
+            title={`Tema di lettura: ${settings.theme === 'sepia' ? 'Sepia (Riposante)' : settings.theme === 'dark' ? 'Notte (Scuro)' : 'Chiaro (Originale)'}. Clicca per cambiare`}
+          >
+            {settings.theme === 'sepia' ? (
+              <Sparkles size={18} />
+            ) : settings.theme === 'dark' || settings.theme === 'night' ? (
+              <Moon size={18} />
+            ) : (
+              <Sun size={18} />
+            )}
+          </button>
 
           {/* Bookmark Button */}
           <button
@@ -502,18 +627,18 @@ export const PdfReader: React.FC<Props> = ({
 
       {/* Floating Zoom Toast Notification */}
       {zoomToast && (
-        <div className="fixed top-16 left-1/2 -translate-x-1/2 z-50 px-4 py-1.5 bg-slate-900 text-sky-400 text-xs font-mono font-bold rounded-full shadow-2xl border border-slate-700 transition-all pointer-events-none">
-          Zoom: {zoomToast}
+        <div className="fixed top-16 left-1/2 -translate-x-1/2 z-50 px-4 py-1.5 bg-slate-900/95 text-sky-300 text-xs font-mono font-bold rounded-full shadow-2xl border border-sky-500/40 backdrop-blur-md transition-all pointer-events-none">
+          {zoomToast}
         </div>
       )}
 
-      {/* Main Reading Area - Comfortable Natural Paper Canvas Background */}
+      {/* Main Reading Area */}
       <div
         ref={containerRef}
         onTouchStart={handleTouchStart}
         onTouchMove={handleTouchMove}
         onTouchEnd={handleTouchEnd}
-        className="flex-1 relative overflow-auto p-2 sm:p-6 bg-slate-200/90"
+        className="flex-1 relative overflow-auto p-1.5 sm:p-6 bg-slate-200/90"
       >
         {loading ? (
           <div className="min-h-full flex flex-col items-center justify-center p-12 space-y-3 text-center">
@@ -533,8 +658,8 @@ export const PdfReader: React.FC<Props> = ({
             </div>
           </div>
         ) : (
-          <div className="min-w-fit min-h-full mx-auto flex flex-col items-center justify-start my-auto relative p-1 sm:p-2">
-            {/* Direct Navigation Touch Overlay Buttons - Small, Semi-transparent & Discreet */}
+          <div className="min-w-fit min-h-full mx-auto flex flex-col items-center justify-start my-auto relative p-0.5 sm:p-2">
+            {/* Direct Navigation Touch Overlay Buttons - Discreet & Semi-transparent */}
             <button
               onClick={prevPage}
               disabled={currentPage <= 1}
@@ -553,14 +678,24 @@ export const PdfReader: React.FC<Props> = ({
               <ChevronRight size={16} />
             </button>
 
-            {/* Canvas Page Render - Pure, High Contrast Vector Page */}
+            {/* Canvas Page Render - Double Buffering Dual Canvas (Razor Sharp Vector Rendering) */}
             <div
               onClick={handleCanvasDoubleTap}
-              className="rounded-lg overflow-hidden transition-all duration-200 cursor-zoom-in bg-white border border-slate-300/80 shadow-2xl relative max-w-none"
-              title="Doppio tocco / clic per ingrandire o ridurre"
-              style={{ filter: 'none' }}
+              className="rounded-lg overflow-hidden cursor-zoom-in border border-slate-300/80 shadow-2xl relative max-w-none transition-filter duration-300"
+              title="Doppio tocco / clic per ingrandire o ridurre il testo"
+              style={getThemeFilterStyle(settings.theme)}
             >
-              <canvas ref={canvasRef} className="block mx-auto max-w-none select-none pointer-events-none" />
+              {/* Canvas A */}
+              <canvas
+                ref={canvasRefA}
+                className={`mx-auto max-w-none select-none pointer-events-none ${activeCanvasId === 'A' ? 'block' : 'hidden'}`}
+              />
+
+              {/* Canvas B */}
+              <canvas
+                ref={canvasRefB}
+                className={`mx-auto max-w-none select-none pointer-events-none ${activeCanvasId === 'B' ? 'block' : 'hidden'}`}
+              />
 
               {/* Bookmark Ribbon on Canvas Page */}
               {isCurrentBookmarked && (
@@ -631,12 +766,12 @@ export const PdfReader: React.FC<Props> = ({
       )}
 
       {/* 4. Bottom Navigation Toolbar */}
-      <footer className="sticky bottom-0 z-30 px-3 sm:px-4 py-2.5 bg-slate-900 text-slate-100 border-t border-slate-800 flex items-center justify-between gap-2 sm:gap-3 shadow-lg">
+      <footer className="sticky bottom-0 z-30 px-3 sm:px-4 py-2 bg-slate-900 text-slate-100 border-t border-slate-800 flex items-center justify-between gap-2 sm:gap-3 shadow-lg">
         {/* Previous Page */}
         <button
           onClick={prevPage}
           disabled={currentPage <= 1}
-          className="p-2 sm:p-2.5 rounded-xl border border-slate-700 hover:bg-slate-800 disabled:opacity-30 transition-all text-slate-200"
+          className="p-2 rounded-xl border border-slate-700 hover:bg-slate-800 disabled:opacity-30 transition-all text-slate-200"
           title="Pagina precedente"
         >
           <ChevronLeft size={20} />
@@ -661,32 +796,33 @@ export const PdfReader: React.FC<Props> = ({
         <button
           onClick={nextPage}
           disabled={currentPage >= numPages}
-          className="p-2 sm:p-2.5 rounded-xl border border-slate-700 hover:bg-slate-800 disabled:opacity-30 transition-all text-slate-200"
+          className="p-2 rounded-xl border border-slate-700 hover:bg-slate-800 disabled:opacity-30 transition-all text-slate-200"
           title="Pagina successiva"
         >
           <ChevronRight size={20} />
         </button>
 
-        {/* Quick Zoom Buttons */}
+        {/* Quick Zoom Buttons with Clear Text Size Control */}
         <div className="flex items-center gap-1 border-l border-slate-700 pl-2">
           <button
             onClick={handleZoomOut}
-            className="p-2 rounded-lg border border-slate-700 hover:bg-slate-800 text-slate-200"
-            title="Riduci zoom (-)"
+            className="p-1.5 sm:p-2 rounded-lg border border-slate-700 hover:bg-slate-800 text-slate-200"
+            title="Riduci caratteri (-)"
           >
             <ZoomOut size={16} />
           </button>
           <button
-            onClick={handleResetZoom}
-            className="p-2 rounded-lg border border-slate-700 hover:bg-slate-800 text-sky-400 font-mono text-xs font-bold"
-            title="Ripristina zoom 100%"
+            onClick={() => handleSetScale(settings.fontSizeScale >= 1.35 ? 1.0 : 1.45)}
+            className="px-2 py-1 rounded-lg border border-slate-700 hover:bg-slate-800 text-sky-400 font-mono text-xs font-bold flex items-center gap-1"
+            title="Tocca per alternare tra Adatta e Testo Grande"
           >
-            100%
+            <Type size={13} className="text-sky-400" />
+            <span>{Math.round((settings.fontSizeScale || 1.2) * 100)}%</span>
           </button>
           <button
             onClick={handleZoomIn}
-            className="p-2 rounded-lg bg-sky-500 text-white font-bold hover:bg-sky-400 shadow-xs"
-            title="Ingrandisci zoom (+)"
+            className="p-1.5 sm:p-2 rounded-lg bg-sky-500 text-white font-bold hover:bg-sky-400 shadow-xs"
+            title="Ingrandisci caratteri (+)"
           >
             <ZoomIn size={16} />
           </button>
@@ -695,4 +831,5 @@ export const PdfReader: React.FC<Props> = ({
     </div>
   );
 };
+
 

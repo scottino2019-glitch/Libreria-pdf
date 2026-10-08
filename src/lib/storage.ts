@@ -6,7 +6,7 @@ const SETTINGS_KEY = 'pdf_library_settings_v1';
 
 export const DEFAULT_SETTINGS: ReadingSettings = {
   theme: 'light',
-  fontSizeScale: 1.0,
+  fontSizeScale: 1.2, // Confortevole per smartphone e desktop
   viewMode: 'single',
   autoSavePosition: true,
   brightness: 100,
@@ -81,7 +81,16 @@ export function saveReadingProgress(progress: ReadingProgress): void {
 export function getSettings(): ReadingSettings {
   try {
     const raw = localStorage.getItem(SETTINGS_KEY);
-    return raw ? { ...DEFAULT_SETTINGS, ...JSON.parse(raw) } : DEFAULT_SETTINGS;
+    if (!raw) return DEFAULT_SETTINGS;
+    const parsed = JSON.parse(raw);
+    const parsedScale = Number(parsed.fontSizeScale);
+    // Sanitize: ensure scale is at least 1.0 (never allow shrunk microtext from old sessions)
+    const sanitizedScale = !isNaN(parsedScale) && parsedScale >= 1.0 ? Math.min(3.5, parsedScale) : DEFAULT_SETTINGS.fontSizeScale;
+    return {
+      ...DEFAULT_SETTINGS,
+      ...parsed,
+      fontSizeScale: sanitizedScale,
+    };
   } catch (err) {
     return DEFAULT_SETTINGS;
   }
