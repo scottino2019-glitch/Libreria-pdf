@@ -15,7 +15,15 @@
     "size": 14000,
     "addedAt": "2026-08-07T12:00:00.000Z",
     "url": "/Operazione_vulcano.pdf",
-    "isSample": true
-  
+    "isSample": false
+  },
+  {
+    "id": "Eresia.pdf",
+    "filename": "Eresia.pdf",
+    "title": "Eresia",
+    "size": 14000,
+    "addedAt": "2026-10-11T12:00:00.000Z",
+    "url": "/Eresia.pdf",
+    "isSample": false
   }
 ]
