@@ -4,10 +4,16 @@ import {
   getBookmarks,
   addBookmark,
   removeBookmark,
+  removeBookmarksForPdf,
   getReadingProgressMap,
   saveReadingProgress,
+  removeReadingProgress,
   getSettings,
   saveSettings,
+  markPdfDeleted,
+  isPdfDeleted,
+  dismissSamplePdfs,
+  areSamplesDismissed,
   DEFAULT_SETTINGS
 } from './lib/storage';
 import { generateSamplePdfsClient } from './lib/samplePdfs';
@@ -31,6 +37,7 @@ export default function App() {
   // Modals & Active Tab
   const [showBookmarksModal, setShowBookmarksModal] = useState<boolean>(false);
   const [activeTab, setActiveTab] = useState<'library' | 'bookmarks' | 'settings'>('library');
+  const [targetReaderMode, setTargetReaderMode] = useState<'pdf' | 'text'>('pdf');
 
   // Load state from static /pdf folder + samples + IndexedDB user uploads
   const loadLibraryData = useCallback(async () => {
@@ -43,27 +50,33 @@ export default function App() {
       if (res.ok) {
         const folderPdfs: PdfItem[] = await res.json();
         if (Array.isArray(folderPdfs) && folderPdfs.length > 0) {
-          serverFolderPdfs = folderPdfs;
+          // Exclude any file that the user deleted
+          serverFolderPdfs = folderPdfs.filter(p => !isPdfDeleted(p.id, p.filename));
         }
       }
     } catch (err) {
       console.log('Nessun file statico /pdf/index.json disponibile:', err);
     }
 
-    // 2. Load Client Sample PDFs
-    let samplePdfs: PdfItem[] = [];
-    try {
-      samplePdfs = await generateSamplePdfsClient();
-    } catch (err) {
-      console.error('Errore durante il caricamento dei campioni:', err);
-    }
-
-    // 3. Load Stored PDFs from IndexedDB (User Uploads)
+    // 2. Load Stored PDFs from IndexedDB (User Uploads)
     let storedPdfs: PdfItem[] = [];
     try {
-      storedPdfs = await loadStoredPdfs();
+      const allStored = await loadStoredPdfs();
+      storedPdfs = allStored.filter(p => !isPdfDeleted(p.id, p.filename));
     } catch (err) {
       console.error('Errore durante il caricamento dei PDF memorizzati:', err);
+    }
+
+    // 3. Client Sample PDFs: ONLY load if the user has NO real books AND has not dismissed/deleted samples!
+    let samplePdfs: PdfItem[] = [];
+    const hasRealBooks = serverFolderPdfs.length > 0 || storedPdfs.length > 0;
+    if (!hasRealBooks && !areSamplesDismissed()) {
+      try {
+        const generated = await generateSamplePdfsClient();
+        samplePdfs = generated.filter(p => !isPdfDeleted(p.id, p.filename));
+      } catch (err) {
+        console.error('Errore durante il caricamento dei campioni:', err);
+      }
     }
 
     // Combine all sources and deduplicate by filename / id
@@ -72,7 +85,8 @@ export default function App() {
     const seen = new Set<string>();
 
     for (const item of combined) {
-      const key = (item.id || item.filename).toLowerCase();
+      if (isPdfDeleted(item.id, item.filename)) continue;
+      const key = (item.id || item.filename).toLowerCase().trim();
       if (!seen.has(key)) {
         seen.add(key);
         uniquePdfs.push(item);
@@ -120,17 +134,37 @@ export default function App() {
     }
   };
 
-  // Delete PDF handler (removes from memory if stored)
-  const handleDeletePdf = async (filenameOrId: string) => {
-    const target = pdfs.find(p => p.filename === filenameOrId || p.id === filenameOrId);
-    if (target) {
-      if (!target.isSample) {
-        await deleteStoredPdf(target.id);
-      }
-      setPdfs(prev => prev.filter(p => p.id !== target.id && p.filename !== target.filename));
-      if (activePdf?.filename === target.filename || activePdf?.id === target.id) {
-        setActivePdf(null);
-      }
+  // Delete PDF handler with persistent storage & cache cleanup
+  const handleDeletePdf = async (id: string, filename?: string) => {
+    const target = pdfs.find(p => p.id === id || (filename && p.filename === filename));
+    const targetId = target?.id || id;
+    const targetFilename = target?.filename || filename || '';
+
+    // 1. Mark in permanent blacklist so it NEVER reappears upon refresh or reload
+    markPdfDeleted(targetId, targetFilename);
+
+    // 2. If it is a sample book, dismiss all samples so generator never runs again
+    if (target?.isSample) {
+      dismissSamplePdfs();
+    }
+
+    // 3. Delete from IndexedDB storage
+    await deleteStoredPdf(targetId);
+    if (targetFilename) {
+      await deleteStoredPdf(targetFilename);
+    }
+
+    // 4. Clean up reading progress & bookmarks
+    removeReadingProgress(targetId);
+    removeBookmarksForPdf(targetId);
+    setProgressMap(getReadingProgressMap());
+    setBookmarks(getBookmarks());
+
+    // 5. Update React state immediately
+    setPdfs(prev => prev.filter(p => p.id !== targetId && (!targetFilename || p.filename !== targetFilename)));
+
+    if (activePdf?.id === targetId || (targetFilename && activePdf?.filename === targetFilename)) {
+      setActivePdf(null);
     }
   };
 
@@ -221,6 +255,13 @@ export default function App() {
     setShowBookmarksModal(false);
   }, []);
 
+  const handleOpenPdf = useCallback((pdf: PdfItem, initialMode?: 'pdf' | 'text') => {
+    setActivePdf(pdf);
+    if (initialMode) {
+      setTargetReaderMode(initialMode);
+    }
+  }, []);
+
   // If viewing a PDF reader
   if (activePdf) {
     const prog = progressMap[activePdf.id];
@@ -233,6 +274,7 @@ export default function App() {
           settings={settings}
           bookmarks={bookmarks}
           initialPage={startPage}
+          initialDisplayMode={targetReaderMode}
           onUpdateSettings={handleUpdateSettings}
           onToggleBookmark={handleToggleBookmarkForActive}
           onSaveProgress={handleSaveProgressForActive}
@@ -309,7 +351,7 @@ export default function App() {
           bookmarks={bookmarks}
           progressMap={progressMap}
           pdfDirName={pdfDir}
-          onOpenPdf={pdf => setActivePdf(pdf)}
+          onOpenPdf={handleOpenPdf}
           onUploadPdf={handleUploadPdf}
           onDeletePdf={handleDeletePdf}
           onRefresh={loadLibraryData}

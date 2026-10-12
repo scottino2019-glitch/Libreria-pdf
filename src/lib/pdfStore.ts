@@ -103,20 +103,45 @@ export async function loadStoredPdfs(): Promise<PdfItem[]> {
   }
 }
 
-export async function deleteStoredPdf(id: string): Promise<void> {
+export async function deleteStoredPdf(idOrFilename: string): Promise<void> {
   try {
     const db = await openDb();
     await new Promise<void>((resolve, reject) => {
       const tx = db.transaction(STORE_NAME, 'readwrite');
       const store = tx.objectStore(STORE_NAME);
-      const request = store.delete(id);
-      request.onsuccess = () => resolve();
-      request.onerror = () => reject(request.error);
+
+      // Direct delete by primary key
+      store.delete(idOrFilename);
+
+      // Also scan and delete any records matching filename or id
+      const cursorReq = store.openCursor();
+      cursorReq.onsuccess = (e) => {
+        const cursor = (e.target as IDBRequest<IDBCursorWithValue>).result;
+        if (cursor) {
+          const val = cursor.value as StoredPdfRecord;
+          if (
+            val.id === idOrFilename ||
+            val.filename === idOrFilename ||
+            val.filename.toLowerCase() === idOrFilename.toLowerCase() ||
+            val.id.toLowerCase() === idOrFilename.toLowerCase()
+          ) {
+            cursor.delete();
+            if (activeObjectUrls[val.id]) {
+              URL.revokeObjectURL(activeObjectUrls[val.id]);
+              delete activeObjectUrls[val.id];
+            }
+          }
+          cursor.continue();
+        } else {
+          resolve();
+        }
+      };
+      cursorReq.onerror = () => resolve(); // Non-blocking fallback
     });
 
-    if (activeObjectUrls[id]) {
-      URL.revokeObjectURL(activeObjectUrls[id]);
-      delete activeObjectUrls[id];
+    if (activeObjectUrls[idOrFilename]) {
+      URL.revokeObjectURL(activeObjectUrls[idOrFilename]);
+      delete activeObjectUrls[idOrFilename];
     }
   } catch (err) {
     console.error('Errore durante l\'eliminazione del PDF da IndexedDB:', err);

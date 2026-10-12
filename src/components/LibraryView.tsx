@@ -31,9 +31,9 @@ interface Props {
   bookmarks: Bookmark[];
   progressMap: Record<string, ReadingProgress>;
   pdfDirName: string;
-  onOpenPdf: (pdf: PdfItem) => void;
+  onOpenPdf: (pdf: PdfItem, initialMode?: 'pdf' | 'text') => void;
   onUploadPdf: (file: File) => Promise<void>;
-  onDeletePdf: (filename: string) => Promise<void>;
+  onDeletePdf: (id: string, filename?: string) => Promise<void>;
   onRefresh: () => void;
   isLoading: boolean;
 }
@@ -54,7 +54,7 @@ export const LibraryView: React.FC<Props> = ({
   const [viewMode, setViewMode] = useState<'shelves' | 'grid' | 'list'>('shelves');
   const [isUploading, setIsUploading] = useState(false);
   const [dragOver, setDragOver] = useState(false);
-  const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
+  const [pdfToDelete, setPdfToDelete] = useState<PdfItem | null>(null);
   const [installPrompt, setInstallPrompt] = useState<any>(null);
   const [isAppInstalled, setIsAppInstalled] = useState<boolean>(false);
   const [showPwaGuide, setShowPwaGuide] = useState<boolean>(false);
@@ -446,7 +446,7 @@ export const LibraryView: React.FC<Props> = ({
 
               <div className="pt-2 flex flex-wrap items-center justify-center md:justify-start gap-3">
                 <button
-                  onClick={() => onOpenPdf(currentlyReadingPdf)}
+                  onClick={() => onOpenPdf(currentlyReadingPdf, 'pdf')}
                   className="px-6 py-3 rounded-xl bg-[#D4AF37] hover:bg-[#e2bd44] text-stone-950 font-bold text-xs uppercase tracking-wider flex items-center gap-2 shadow-lg transition-all"
                 >
                   <BookOpen size={16} />
@@ -456,6 +456,23 @@ export const LibraryView: React.FC<Props> = ({
                       : 'Apri Volume e Leggi'}
                   </span>
                   <ArrowRight size={16} />
+                </button>
+
+                <button
+                  onClick={() => onOpenPdf(currentlyReadingPdf, 'text')}
+                  className="px-4 py-3 rounded-xl bg-amber-950/80 hover:bg-amber-900 border border-amber-700/60 text-[#D4AF37] font-semibold text-xs uppercase tracking-wider flex items-center gap-1.5 transition-all"
+                  title="Estrai e leggi il testo con caratteri grandi e riposanti"
+                >
+                  <FileText size={15} />
+                  <span>Leggi Testo Estratto</span>
+                </button>
+
+                <button
+                  onClick={() => setPdfToDelete(currentlyReadingPdf)}
+                  className="p-3 rounded-xl bg-red-950/40 hover:bg-red-900/60 border border-red-800/50 text-red-300 hover:text-red-100 transition-all cursor-pointer"
+                  title="Elimina questo volume dalla libreria"
+                >
+                  <Trash2 size={16} />
                 </button>
               </div>
             </div>
@@ -619,11 +636,14 @@ export const LibraryView: React.FC<Props> = ({
                         onClick={() => onOpenPdf(pdf)}
                       />
 
-                      {/* Quick Delete Hover Overlay */}
+                      {/* Quick Delete Overlay */}
                       <button
-                        onClick={(e) => { e.stopPropagation(); setDeleteConfirm(pdf.filename); }}
-                        className="opacity-0 group-hover:opacity-100 transition-opacity absolute -top-2 -right-2 p-1.5 rounded-full bg-red-950 border border-red-700 text-red-200 hover:bg-red-800 z-30 shadow-lg"
-                        title="Elimina PDF"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setPdfToDelete(pdf);
+                        }}
+                        className="opacity-90 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity absolute -top-2 -right-2 p-1.5 rounded-full bg-red-950/90 border border-red-700 text-red-200 hover:bg-red-800 z-30 shadow-lg cursor-pointer"
+                        title={`Elimina ${pdf.title}`}
                       >
                         <Trash2 size={13} />
                       </button>
@@ -670,16 +690,25 @@ export const LibraryView: React.FC<Props> = ({
 
                 <div className="mt-5 pt-3 border-t border-[#5a4030]/40 flex items-center gap-2">
                   <button
-                    onClick={() => onOpenPdf(pdf)}
-                    className="flex-1 py-2.5 px-4 rounded-xl bg-[#D4AF37] hover:bg-[#e2bd44] text-stone-950 font-bold text-xs uppercase tracking-wider flex items-center justify-center gap-2 transition-all shadow-md"
+                    onClick={() => onOpenPdf(pdf, 'pdf')}
+                    className="flex-1 py-2.5 px-3 rounded-xl bg-[#D4AF37] hover:bg-[#e2bd44] text-stone-950 font-bold text-xs uppercase tracking-wider flex items-center justify-center gap-1.5 transition-all shadow-md cursor-pointer"
                   >
                     <BookOpen size={15} />
-                    <span>{prog && prog.currentPage > 1 ? `Continua (Pag. ${prog.currentPage})` : 'Leggi'}</span>
+                    <span>{prog && prog.currentPage > 1 ? `Pag. ${prog.currentPage}` : 'Leggi'}</span>
                   </button>
 
                   <button
-                    onClick={() => setDeleteConfirm(pdf.filename)}
-                    className="p-2.5 rounded-xl border border-[#5a4030] text-amber-200/60 hover:text-red-400 hover:border-red-900 transition-colors"
+                    onClick={() => onOpenPdf(pdf, 'text')}
+                    className="py-2.5 px-3 rounded-xl bg-amber-950/70 hover:bg-amber-900 border border-amber-700/60 text-[#D4AF37] font-bold text-xs flex items-center gap-1 transition-all cursor-pointer"
+                    title="Estrai e leggi il testo"
+                  >
+                    <FileText size={14} />
+                    <span className="hidden xs:inline">Testo</span>
+                  </button>
+
+                  <button
+                    onClick={() => setPdfToDelete(pdf)}
+                    className="p-2.5 rounded-xl border border-[#5a4030] text-amber-200/60 hover:text-red-400 hover:border-red-900 transition-colors cursor-pointer"
                     title="Elimina volume"
                   >
                     <Trash2 size={16} />
@@ -728,14 +757,22 @@ export const LibraryView: React.FC<Props> = ({
 
                 <div className="flex items-center gap-2 self-end sm:self-center">
                   <button
-                    onClick={() => onOpenPdf(pdf)}
-                    className="px-4 py-2 rounded-xl bg-[#D4AF37] hover:bg-[#e2bd44] text-stone-950 font-bold text-xs uppercase tracking-wider flex items-center gap-1.5 shadow-md"
+                    onClick={() => onOpenPdf(pdf, 'pdf')}
+                    className="px-3.5 py-2 rounded-xl bg-[#D4AF37] hover:bg-[#e2bd44] text-stone-950 font-bold text-xs uppercase tracking-wider flex items-center gap-1.5 shadow-md cursor-pointer"
                   >
                     <BookOpen size={15} /> Leggi
                   </button>
                   <button
-                    onClick={() => setDeleteConfirm(pdf.filename)}
-                    className="p-2 rounded-xl border border-[#5a4030] text-amber-200/50 hover:text-red-400"
+                    onClick={() => onOpenPdf(pdf, 'text')}
+                    className="px-3 py-2 rounded-xl bg-amber-950/70 hover:bg-amber-900 border border-amber-700/60 text-[#D4AF37] font-semibold text-xs flex items-center gap-1 cursor-pointer"
+                    title="Estrai e leggi il testo"
+                  >
+                    <FileText size={14} /> Testo
+                  </button>
+                  <button
+                    onClick={() => setPdfToDelete(pdf)}
+                    className="p-2 rounded-xl border border-[#5a4030] text-amber-200/50 hover:text-red-400 cursor-pointer"
+                    title="Elimina volume"
                   >
                     <Trash2 size={15} />
                   </button>
@@ -747,8 +784,8 @@ export const LibraryView: React.FC<Props> = ({
       )}
 
       {/* Delete Confirmation Modal */}
-      {deleteConfirm && (
-        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
+      {pdfToDelete && (
+        <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-xs flex items-center justify-center p-4">
           <div className="bg-[#241710] border border-[#5a4030] rounded-2xl p-6 max-w-sm w-full space-y-4 shadow-2xl animate-fadeIn text-[#FCE7D0]">
             <div className="flex items-center gap-3">
               <div className="p-2.5 rounded-xl bg-red-950/80 text-red-400 border border-red-800/40">
@@ -758,25 +795,25 @@ export const LibraryView: React.FC<Props> = ({
                 Conferma eliminazione
               </h3>
             </div>
-            <p className="text-xs text-amber-200/70 leading-relaxed">
-              Vuoi davvero rimuovere <strong className="text-amber-100">{deleteConfirm}</strong> dalla libreria locale del tuo browser? L'operazione è irreversibile.
+            <p className="text-xs text-amber-200/80 leading-relaxed">
+              Vuoi davvero eliminare <strong className="text-amber-100 font-bold">«{pdfToDelete.title}»</strong> ({pdfToDelete.filename}) dalla tua libreria? L'operazione è definitiva.
             </p>
             <div className="flex gap-2 justify-end pt-2">
               <button
-                onClick={() => setDeleteConfirm(null)}
-                className="px-4 py-2 text-xs uppercase tracking-wider font-semibold text-amber-200/70 hover:bg-black/30 rounded-xl"
+                onClick={() => setPdfToDelete(null)}
+                className="px-4 py-2 text-xs uppercase tracking-wider font-semibold text-amber-200/70 hover:bg-black/30 rounded-xl cursor-pointer"
               >
                 Annulla
               </button>
               <button
                 onClick={async () => {
-                  const target = deleteConfirm;
-                  setDeleteConfirm(null);
-                  await onDeletePdf(target);
+                  const target = pdfToDelete;
+                  setPdfToDelete(null);
+                  await onDeletePdf(target.id, target.filename);
                 }}
-                className="px-4 py-2 text-xs uppercase tracking-wider font-bold bg-red-800 text-stone-100 hover:bg-red-700 rounded-xl shadow-md"
+                className="px-4 py-2 text-xs uppercase tracking-wider font-bold bg-red-800 text-stone-100 hover:bg-red-700 rounded-xl shadow-md cursor-pointer"
               >
-                Elimina Volume
+                Elimina Definitivamente
               </button>
             </div>
           </div>

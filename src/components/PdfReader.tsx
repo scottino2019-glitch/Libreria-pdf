@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { pdfjsLib } from '../lib/pdfWorker';
-import { PdfItem, Bookmark, ReadingSettings, SearchResult, ReadingTheme } from '../types';
+import { PdfItem, Bookmark, ReadingSettings, SearchResult, ReadingTheme, ReaderDisplayMode } from '../types';
+import { ExtractedTextReader } from './ExtractedTextReader';
 import {
   ArrowLeft,
   ChevronLeft,
@@ -16,7 +17,8 @@ import {
   Sun,
   Moon,
   Sparkles,
-  Type
+  Type,
+  FileText
 } from 'lucide-react';
 
 interface Props {
@@ -24,6 +26,7 @@ interface Props {
   settings: ReadingSettings;
   bookmarks: Bookmark[];
   initialPage?: number;
+  initialDisplayMode?: ReaderDisplayMode;
   onUpdateSettings: (settings: ReadingSettings) => void;
   onToggleBookmark: (pageNumber: number) => void;
   onSaveProgress: (pageNumber: number, totalPages: number) => void;
@@ -36,6 +39,7 @@ export const PdfReader: React.FC<Props> = ({
   settings,
   bookmarks,
   initialPage = 1,
+  initialDisplayMode,
   onUpdateSettings,
   onToggleBookmark,
   onSaveProgress,
@@ -43,6 +47,9 @@ export const PdfReader: React.FC<Props> = ({
   onOpenBookmarksModal,
 }) => {
   const [doc, setDoc] = useState<pdfjsLib.PDFDocumentProxy | null>(null);
+  const [displayMode, setDisplayMode] = useState<ReaderDisplayMode>(
+    initialDisplayMode || settings.readerMode || 'pdf'
+  );
   const [currentPage, setCurrentPage] = useState<number>(initialPage);
   const [numPages, setNumPages] = useState<number>(1);
   const [loading, setLoading] = useState<boolean>(true);
@@ -445,18 +452,44 @@ export const PdfReader: React.FC<Props> = ({
     }
   };
 
+  // If user selected Extracted Text Mode and document is loaded
+  if (displayMode === 'text' && doc) {
+    return (
+      <ExtractedTextReader
+        doc={doc}
+        pdf={pdf}
+        currentPage={currentPage}
+        numPages={numPages}
+        settings={settings}
+        bookmarks={bookmarks}
+        onPageChange={(page) => {
+          goToPage(page);
+        }}
+        onUpdateSettings={onUpdateSettings}
+        onToggleBookmark={onToggleBookmark}
+        onSwitchToPdfMode={() => {
+          setDisplayMode('pdf');
+          onUpdateSettings({ ...settings, readerMode: 'pdf' });
+        }}
+        onBackToLibrary={onBackToLibrary}
+        onOpenBookmarksModal={onOpenBookmarksModal}
+      />
+    );
+  }
+
   return (
     <div className="min-h-screen flex flex-col bg-slate-100 text-slate-900 select-none">
       {/* 1. Header Toolbar Superiore */}
       <header className="sticky top-0 z-30 px-3.5 py-2.5 bg-slate-900 text-slate-100 border-b border-slate-800 flex items-center justify-between gap-2 shadow-md">
-        {/* Left: Back & Title */}
-        <div className="flex items-center gap-2 overflow-hidden">
+        {/* Left: Back to Library & Title */}
+        <div className="flex items-center gap-2.5 overflow-hidden">
           <button
             onClick={onBackToLibrary}
-            className="p-2 rounded-xl hover:bg-slate-800 text-slate-200 transition-colors shrink-0"
-            title="Torna alla Libreria"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-white font-bold text-xs uppercase tracking-wider border border-slate-700 transition-colors shrink-0 cursor-pointer shadow-xs"
+            title="Torna alla Libreria dei libri"
           >
-            <ArrowLeft size={20} />
+            <ArrowLeft size={16} />
+            <span>Libreria</span>
           </button>
 
           <div className="truncate">
@@ -469,8 +502,21 @@ export const PdfReader: React.FC<Props> = ({
           </div>
         </div>
 
-        {/* Right: Actions (Zoom Bar, Reading Theme, Bookmarks, Search, Fullscreen) */}
+        {/* Right: Actions (Extract Text Mode, Zoom Bar, Reading Theme, Bookmarks, Search, Fullscreen) */}
         <div className="flex items-center gap-1.5 shrink-0">
+          {/* Mode Switcher Button: Estrai Testo */}
+          <button
+            onClick={() => {
+              setDisplayMode('text');
+              onUpdateSettings({ ...settings, readerMode: 'text' });
+            }}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-sky-500/20 hover:bg-sky-500/35 text-sky-300 border border-sky-400/40 text-xs font-semibold transition-all shadow-xs cursor-pointer"
+            title="Estrai il testo e passa alla Modalità Lettura Testo (caratteri grandi, riposanti e sintesi vocale)"
+          >
+            <FileText size={15} className="text-sky-400" />
+            <span className="hidden sm:inline">Estrai Testo</span>
+          </button>
+
           {/* Quick Font Zoom Bar */}
           <div className="relative flex items-center bg-slate-800 rounded-xl p-0.5 border border-slate-700/80">
             <button
@@ -767,15 +813,26 @@ export const PdfReader: React.FC<Props> = ({
 
       {/* 4. Bottom Navigation Toolbar */}
       <footer className="sticky bottom-0 z-30 px-3 sm:px-4 py-2 bg-slate-900 text-slate-100 border-t border-slate-800 flex items-center justify-between gap-2 sm:gap-3 shadow-lg">
-        {/* Previous Page */}
-        <button
-          onClick={prevPage}
-          disabled={currentPage <= 1}
-          className="p-2 rounded-xl border border-slate-700 hover:bg-slate-800 disabled:opacity-30 transition-all text-slate-200"
-          title="Pagina precedente"
-        >
-          <ChevronLeft size={20} />
-        </button>
+        {/* Previous Page & Library shortcut */}
+        <div className="flex items-center gap-1.5">
+          <button
+            onClick={onBackToLibrary}
+            className="flex items-center gap-1 px-2.5 py-1.5 rounded-xl border border-slate-700 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold transition-colors shrink-0 cursor-pointer"
+            title="Torna alla Libreria"
+          >
+            <ArrowLeft size={14} />
+            <span className="hidden xs:inline">Libreria</span>
+          </button>
+
+          <button
+            onClick={prevPage}
+            disabled={currentPage <= 1}
+            className="p-2 rounded-xl border border-slate-700 hover:bg-slate-800 disabled:opacity-30 transition-all text-slate-200"
+            title="Pagina precedente"
+          >
+            <ChevronLeft size={20} />
+          </button>
+        </div>
 
         {/* Page Slider / Jump */}
         <div className="flex items-center gap-2 flex-1 max-w-xs mx-auto">
@@ -804,6 +861,19 @@ export const PdfReader: React.FC<Props> = ({
 
         {/* Quick Zoom Buttons with Clear Text Size Control */}
         <div className="flex items-center gap-1 border-l border-slate-700 pl-2">
+          {/* Quick Extract Text Button */}
+          <button
+            onClick={() => {
+              setDisplayMode('text');
+              onUpdateSettings({ ...settings, readerMode: 'text' });
+            }}
+            className="flex items-center gap-1 px-2 py-1.5 rounded-lg border border-sky-500/40 bg-sky-500/20 hover:bg-sky-500/35 text-sky-300 text-xs font-semibold transition-colors mr-1 shrink-0"
+            title="Passa alla modalità lettura testo estratto"
+          >
+            <FileText size={13} />
+            <span className="hidden xs:inline">Testo</span>
+          </button>
+
           <button
             onClick={handleZoomOut}
             className="p-1.5 sm:p-2 rounded-lg border border-slate-700 hover:bg-slate-800 text-slate-200"
